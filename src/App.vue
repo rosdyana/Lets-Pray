@@ -29,6 +29,10 @@ const error = ref("");
 const soundState = ref<'idle' | 'playing' | 'stopping'>('idle');
 const currentAudio = ref<HTMLAudioElement | null>(null);
 const activePrayer = ref<string | null>(null);
+const activeTab = ref<'prayers' | 'settings'>('prayers');
+const activeSettingsSubMenu = ref<'general' | 'prayer' | 'system'>('general');
+const locationInputTimeout = ref<number | null>(null);
+const detectingLocation = ref(false);
 
 const prayerNames = ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"];
 
@@ -46,6 +50,37 @@ async function saveSettings() {
     await fetchPrayerTimes();
   } catch (err) {
     console.error("Failed to save settings:", err);
+  }
+}
+
+function handleLocationChange() {
+  // Clear existing timeout
+  if (locationInputTimeout.value) {
+    clearTimeout(locationInputTimeout.value);
+  }
+  
+  // Set new timeout to debounce the API call
+  locationInputTimeout.value = setTimeout(async () => {
+    await saveSettings();
+  }, 1000); // Wait 1 second after user stops typing
+}
+
+async function autoDetectLocation() {
+  detectingLocation.value = true;
+  error.value = "";
+  try {
+    const systemInfo = await invoke("get_system_info");
+    if (systemInfo && typeof systemInfo === 'object' && 'location' in systemInfo) {
+      const info = systemInfo as any;
+      settings.value.location = info.location;
+      await saveSettings();
+      console.log(`Auto-detected location: ${info.location}, timezone: ${info.timezone}`);
+    }
+  } catch (err) {
+    console.error("Failed to detect location:", err);
+    error.value = "Failed to detect system location";
+  } finally {
+    detectingLocation.value = false;
   }
 }
 
@@ -169,6 +204,10 @@ onMounted(async () => {
   onUnmounted(() => {
     unlistenReminder();
     unlistenAdhan();
+    // Clear any pending location change timeout
+    if (locationInputTimeout.value) {
+      clearTimeout(locationInputTimeout.value);
+    }
   });
 });
 </script>
@@ -181,82 +220,29 @@ onMounted(async () => {
           <span class="crescent">🌙</span>
           <h1>Lets Pray</h1>
         </div>
-        <p class="subtitle">Prayer Reminder & Times</p>
       </div>
     </header>
 
+    <nav class="tab-nav">
+      <button 
+        @click="activeTab = 'prayers'"
+        :class="{ active: activeTab === 'prayers' }"
+        class="tab-btn"
+      >
+        📅 Prayer Times
+      </button>
+      <button 
+        @click="activeTab = 'settings'"
+        :class="{ active: activeTab === 'settings' }"
+        class="tab-btn"
+      >
+        ⚙️ Settings
+      </button>
+    </nav>
+
     <main class="main-content">
-      <div class="settings-section">
-        <h2>Settings</h2>
-        
-        <div class="setting-group">
-          <label for="location">Location:</label>
-          <input 
-            id="location"
-            v-model="settings.location" 
-            type="text" 
-            placeholder="Enter your city"
-            @blur="saveSettings"
-          />
-        </div>
-
-        <div class="setting-group">
-          <label class="checkbox-label">
-            <input 
-              v-model="settings.play_sound" 
-              type="checkbox"
-              @change="saveSettings"
-            />
-            <span class="checkmark"></span>
-            Play Adhan sound
-          </label>
-          <button 
-            v-if="settings.play_sound"
-            @click="testAdhanSound"
-            class="test-sound-btn"
-            :class="{ 'playing': soundState === 'playing' }"
-            type="button"
-          >
-            <span v-if="soundState === 'idle'">🔊 Test Adhan Sound</span>
-            <span v-else-if="soundState === 'playing'">⏹️ Stop Adhan Sound</span>
-          </button>
-        </div>
-
-        <div class="setting-group">
-          <label class="checkbox-label">
-            <input 
-              v-model="settings.run_at_startup" 
-              type="checkbox"
-              @change="saveSettings"
-            />
-            <span class="checkmark"></span>
-            Run at startup
-          </label>
-        </div>
-
-        <div class="setting-group">
-          <label>Enable Prayer Reminders:</label>
-          <div class="prayer-checkboxes">
-            <label 
-              v-for="prayer in prayerNames" 
-              :key="prayer"
-              class="checkbox-label prayer-checkbox"
-            >
-              <input
-                :checked="settings.enabled_prayers.includes(prayer)"
-                type="checkbox"
-                @change="togglePrayer(prayer); saveSettings()"
-              />
-              <span class="checkmark"></span>
-              {{ prayer }}
-            </label>
-          </div>
-        </div>
-    </div>
-
-      <div class="prayer-times-section">
-        <h2>Today's Prayer Times</h2>
-        
+      <!-- Prayer Times Tab -->
+      <div v-if="activeTab === 'prayers'" class="tab-content">
         <div v-if="loading" class="loading">
           Loading prayer times...
         </div>
@@ -278,17 +264,131 @@ onMounted(async () => {
           >
             <div class="prayer-name">
               {{ prayer.name }}
-              <span v-if="activePrayer === prayer.name" class="active-indicator">🔔 NOW</span>
+              <span v-if="activePrayer === prayer.name" class="active-indicator">🔔</span>
             </div>
             <div class="prayer-time-value">{{ prayer.time }}</div>
           </div>
         </div>
       </div>
-  </main>
 
-    <footer class="footer">
-      <p>May Allah bless our prayers and accept our worship</p>
-    </footer>
+      <!-- Settings Tab -->
+      <div v-if="activeTab === 'settings'" class="tab-content">
+        <!-- Settings Sub-menu -->
+        <nav class="settings-sub-nav">
+          <button 
+            @click="activeSettingsSubMenu = 'general'"
+            :class="{ active: activeSettingsSubMenu === 'general' }"
+            class="settings-sub-btn"
+          >
+            ⚙️ General
+          </button>
+          <button 
+            @click="activeSettingsSubMenu = 'prayer'"
+            :class="{ active: activeSettingsSubMenu === 'prayer' }"
+            class="settings-sub-btn"
+          >
+            🕌 Prayer
+          </button>
+          <button 
+            @click="activeSettingsSubMenu = 'system'"
+            :class="{ active: activeSettingsSubMenu === 'system' }"
+            class="settings-sub-btn"
+          >
+            💻 System
+          </button>
+        </nav>
+
+        <!-- General Settings -->
+        <div v-if="activeSettingsSubMenu === 'general'" class="settings-category">
+          <div class="settings-grid">
+            <div class="setting-item">
+              <label for="location">Location:</label>
+              <div class="location-input-group">
+                <input 
+                  id="location"
+                  v-model="settings.location" 
+                  type="text" 
+                  placeholder="Enter your city"
+                  @input="handleLocationChange"
+                />
+                <button 
+                  @click="autoDetectLocation"
+                  :disabled="detectingLocation"
+                  class="auto-detect-btn"
+                  type="button"
+                >
+                  <span v-if="detectingLocation">🔍 Detecting...</span>
+                  <span v-else>🌍 Auto-detect</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Prayer Settings -->
+        <div v-if="activeSettingsSubMenu === 'prayer'" class="settings-category">
+          <div class="settings-grid">
+            <div class="setting-item">
+              <label class="checkbox-label">
+                <input 
+                  v-model="settings.play_sound" 
+                  type="checkbox"
+                  @change="saveSettings"
+                />
+                <span class="checkmark"></span>
+                Play Adhan sound
+              </label>
+              <button 
+                v-if="settings.play_sound"
+                @click="testAdhanSound"
+                class="test-sound-btn"
+                :class="{ 'playing': soundState === 'playing' }"
+                type="button"
+              >
+                <span v-if="soundState === 'idle'">🔊 Test</span>
+                <span v-else-if="soundState === 'playing'">⏹️ Stop</span>
+              </button>
+            </div>
+
+            <div class="setting-item prayer-reminders">
+              <label>Enable Prayer Reminders:</label>
+              <div class="prayer-checkboxes">
+                <label 
+                  v-for="prayer in prayerNames" 
+                  :key="prayer"
+                  class="checkbox-label prayer-checkbox"
+                >
+                  <input
+                    :checked="settings.enabled_prayers.includes(prayer)"
+                    type="checkbox"
+                    @change="togglePrayer(prayer); saveSettings()"
+                  />
+                  <span class="checkmark"></span>
+                  {{ prayer }}
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- System Settings -->
+        <div v-if="activeSettingsSubMenu === 'system'" class="settings-category">
+          <div class="settings-grid">
+            <div class="setting-item">
+              <label class="checkbox-label">
+                <input 
+                  v-model="settings.run_at_startup" 
+                  type="checkbox"
+                  @change="saveSettings"
+                />
+                <span class="checkmark"></span>
+                Run at startup
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
   </div>
 </template>
 
@@ -335,13 +435,13 @@ body {
 .header {
   background: var(--header-bg);
   color: var(--text-light);
-  padding: 1.5rem;
+  padding: 1rem;
   text-align: center;
   box-shadow: var(--shadow);
 }
 
 .header-content {
-  max-width: 400px;
+  max-width: 350px;
   margin: 0 auto;
 }
 
@@ -350,16 +450,15 @@ body {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  margin-bottom: 0.5rem;
 }
 
 .logo h1 {
-  font-size: 1.8rem;
+  font-size: 1.4rem;
   font-weight: 600;
 }
 
 .crescent {
-  font-size: 2rem;
+  font-size: 1.5rem;
   animation: glow 2s ease-in-out infinite alternate;
 }
 
@@ -368,67 +467,164 @@ body {
   to { text-shadow: 0 0 20px var(--accent-gold), 0 0 30px var(--accent-gold); }
 }
 
-.subtitle {
-  font-size: 0.9rem;
-  opacity: 0.9;
+/* Tab Navigation */
+.tab-nav {
+  display: flex;
+  background: var(--card-bg);
+  border-bottom: 1px solid var(--border-color);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  background: transparent;
+  border: none;
+  color: var(--text-dark);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border-bottom: 3px solid transparent;
+}
+
+.tab-btn:hover {
+  background: #f8f9fa;
+}
+
+.tab-btn.active {
+  color: var(--primary-green);
+  border-bottom-color: var(--primary-green);
+  background: #f0f8f0;
 }
 
 /* Main content */
 .main-content {
   flex: 1;
-  padding: 1.5rem;
-  max-width: 400px;
+  padding: 1rem;
+  max-width: 350px;
   margin: 0 auto;
   width: 100%;
 }
 
-/* Card sections */
-.settings-section,
-.prayer-times-section {
-  background: var(--card-bg);
-  border-radius: 12px;
-  padding: 1.5rem;
-  margin-bottom: 1rem;
-  box-shadow: var(--shadow);
-  border: 1px solid var(--border-color);
+/* Tab content */
+.tab-content {
+  min-height: 250px;
 }
 
-.settings-section h2,
-.prayer-times-section h2 {
+/* Settings Sub-menu */
+.settings-sub-nav {
+  display: flex;
+  background: #f8f9fa;
+  border-radius: 6px;
+  padding: 0.2rem;
+  margin-bottom: 0.75rem;
+  gap: 0.2rem;
+}
+
+.settings-sub-btn {
+  flex: 1;
+  padding: 0.4rem 0.6rem;
+  background: transparent;
+  border: none;
+  color: var(--text-dark);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.settings-sub-btn:hover {
+  background: #e9ecef;
+}
+
+.settings-sub-btn.active {
+  background: var(--card-bg);
   color: var(--primary-green);
-  font-size: 1.3rem;
-  margin-bottom: 1rem;
-  text-align: center;
-  border-bottom: 2px solid var(--accent-gold);
-  padding-bottom: 0.5rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Settings Category */
+.settings-category {
+  min-height: 150px;
+}
+
+/* Settings Grid */
+.settings-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.setting-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.setting-item.prayer-reminders {
+  gap: 0.75rem;
+}
+
+/* Location input group */
+.location-input-group {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.location-input-group input {
+  flex: 1;
+}
+
+.auto-detect-btn {
+  padding: 0.6rem 0.8rem;
+  background: var(--secondary-green);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.auto-detect-btn:hover:not(:disabled) {
+  background: var(--primary-green);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(46, 125, 50, 0.3);
+}
+
+.auto-detect-btn:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 /* Inputs */
-.setting-group {
-  margin-bottom: 1rem;
-}
-
-.setting-group label {
-  display: block;
+.setting-item label {
   font-weight: 500;
-  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
 }
 
-.setting-group input[type="text"] {
+.setting-item input[type="text"] {
   width: 100%;
-  padding: 0.75rem;
+  padding: 0.6rem;
   border: 2px solid var(--border-color);
-  border-radius: 8px;
-  font-size: 1rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
   transition: border-color 0.3s ease;
-  background: #1f552d;
+  background: var(--card-bg);
   color: var(--text-dark);
 }
 
-.setting-group input[type="text"]:focus {
+.setting-item input[type="text"]:focus {
   outline: none;
   border-color: var(--secondary-green);
-  box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.2);
+  box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
 }
 
 /* Checkbox */
@@ -438,28 +634,28 @@ body {
   cursor: pointer;
   font-weight: 500;
   color: var(--text-dark);
-  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
 }
 
 .checkbox-label input[type="checkbox"] {
-  margin-right: 0.5rem;
-  width: 18px;
-  height: 18px;
+  margin-right: 0.4rem;
+  width: 14px;
+  height: 14px;
   accent-color: var(--secondary-green);
 }
 
 /* Buttons */
 .test-sound-btn {
-  margin-top: 0.5rem;
-  padding: 0.6rem 1rem;
+  padding: 0.4rem 0.8rem;
   background: var(--accent-gold);
   color: #000;
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.3s ease;
-  width: 100%;
+  font-size: 0.8rem;
+  align-self: flex-start;
 }
 
 .test-sound-btn:hover {
@@ -481,17 +677,18 @@ body {
 .prayer-checkboxes {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
+  gap: 0.3rem;
 }
 
 .prayer-checkbox {
-  background: #0e0e0e;
-  padding: 0.5rem;
-  border-radius: 6px;
+  background: var(--card-bg);
+  padding: 0.3rem 0.5rem;
+  border-radius: 5px;
   border: 1px solid var(--border-color);
   font-weight: 600;
+  font-size: 0.75rem;
   transition: all 0.3s ease;
+  text-align: center;
 }
 
 .prayer-checkbox:hover {
@@ -503,15 +700,15 @@ body {
 .prayer-times {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.5rem;
 }
 
 .prayer-time {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem;
-  border-radius: 8px;
+  padding: 0.75rem;
+  border-radius: 6px;
   border: 2px solid var(--border-color);
   transition: all 0.3s ease;
 }
@@ -544,11 +741,11 @@ body {
 .active-indicator {
   background: #ff5722;
   color: white;
-  padding: 0.2rem 0.5rem;
-  border-radius: 12px;
-  font-size: 0.7rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 8px;
+  font-size: 0.6rem;
   font-weight: bold;
-  margin-left: 0.5rem;
+  margin-left: 0.3rem;
   animation: blink 1s infinite;
 }
 
@@ -560,12 +757,12 @@ body {
 /* Text inside prayer times */
 .prayer-name {
   font-weight: 600;
-  font-size: 1.1rem;
+  font-size: 1rem;
 }
 
 .prayer-time-value {
   font-weight: 500;
-  font-size: 1.2rem;
+  font-size: 1.1rem;
   font-family: 'Courier New', monospace;
 }
 
@@ -573,8 +770,9 @@ body {
 .loading,
 .error {
   text-align: center;
-  padding: 1rem;
-  border-radius: 8px;
+  padding: 0.75rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
 }
 
 .loading {
@@ -588,32 +786,37 @@ body {
   border: 1px solid #f5c6cb;
 }
 
-/* Footer */
-.footer {
-  background: var(--primary-green);
-  color: var(--text-light);
-  text-align: center;
-  padding: 1rem;
-  font-size: 0.9rem;
-}
-
 /* --- Responsive --- */
 @media (max-width: 480px) {
   .main-content {
-    padding: 1rem;
-  }
-  .settings-section,
-  .prayer-times-section {
-    padding: 1rem;
+    padding: 0.75rem;
   }
   .prayer-checkboxes {
-    grid-template-columns: 1fr;
+    gap: 0.25rem;
   }
   .logo h1 {
-    font-size: 1.5rem;
+    font-size: 1.2rem;
   }
   .crescent {
-    font-size: 1.5rem;
+    font-size: 1.3rem;
+  }
+  .tab-btn {
+    padding: 0.6rem 0.8rem;
+    font-size: 0.9rem;
+  }
+  .location-input-group {
+    flex-direction: column;
+  }
+  .auto-detect-btn {
+    width: 100%;
+  }
+  .settings-sub-nav {
+    gap: 0.15rem;
+    padding: 0.2rem;
+  }
+  .settings-sub-btn {
+    padding: 0.4rem 0.5rem;
+    font-size: 0.75rem;
   }
 }
 
@@ -634,18 +837,20 @@ body {
     color: var(--text-dark);
   }
 
-  .settings-section,
-  .prayer-times-section {
-    background: var(--card-bg);
-    border-color: var(--border-color);
-  }
-
   .prayer-time.enabled {
     background: linear-gradient(135deg, #1e4620, #2e7d32);
   }
 
-  .footer {
-    background: #1b3a1e;
+  .settings-sub-nav {
+    background: #2a3a2e;
+  }
+
+  .settings-sub-btn:hover {
+    background: #3a4a3e;
+  }
+
+  .settings-sub-btn.active {
+    background: var(--card-bg);
   }
 }
 </style>

@@ -12,9 +12,10 @@
   "app": {
     "windows": [
       {
-        "title": "Lets Pray - Settings",
-        "width": 400,
-        "height": 500,
+        "label": "main",
+        "title": "Lets Pray",
+        "width": 350,
+        "height": 450,
         "resizable": false,
         "visible": false,
         "maximizable": false
